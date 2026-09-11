@@ -75,7 +75,8 @@ models:
 ## 路由约定
 - 规划器（LLM 工具路由）：Skill 的 `SKILL.md` frontmatter 转成 tool schema，由 ChatModel 选择；tool 参数由该 Skill 的 `required_args` + `host` 动态生成。
 - 风险分级：`risk` 由 Skill 静态声明（`low`/`high`）；**审批闸门 = `risk:high` 且 `mode:automated`**（人工对话 / 手动 CLI 为 `interactive`，不审批）。
-- **多轮澄清**：Skill 声明 `required_args`（如 `disk_cleanup` 的 `path`）。若规划器未带齐，`clarify` 节点 `interrupt()` 抛出 `clarification_request` 反问；用户经 `/resume` 回复后合并参数并继续。该机制与风险等级解耦——低风险技能缺参数也会先澄清，但不触发审批。
+- **多轮澄清（全程 LLM 意图识别）**：Skill 声明 `required_args`（如 `disk_cleanup` 的 `path`）。若规划器未带齐，`clarify` 节点 `interrupt()` 抛出 `clarification_request` 反问；用户经 `/resume` 用**自然语言**回复（如"就是 /data 那个盘"），由 LLM（`simple_task` 模型）从回复中抽取出结构化参数，规则解析仅作兜底。该机制与风险等级解耦——低风险技能缺参数也会先澄清，但不触发审批。
+- **使用者只说自然语言，不直输命令/JSON**：入口（首轮 `planner` 与多轮 `clarify`）统一经 LLM 把自然语言转成 Skill 声明的结构化参数；用户没有"直接敲执行命令"的通道。JSON 回复会被过滤为仅 Skill 声明的 `required_args`（+`host`），杜绝任意字段注入。
 - 执行后端：Skill 通过 `get_executor().run(cmd)` 执行，local/ssh 零侵入切换。
 
 ## 审核触发规则与运维场景

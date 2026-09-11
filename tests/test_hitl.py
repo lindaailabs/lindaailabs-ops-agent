@@ -166,3 +166,66 @@ def test_low_risk_clarification():
     resumed = graph.invoke(Command(resume={"path": "/var"}), cfg)
     assert resumed["approved"] is True
     assert resumed["execution_result"]["echo"] == "/var"
+
+
+class _FakeRouter:
+    """模拟 simple_task 模型的参数抽取，避免依赖真实 LLM key。"""
+
+    def get(self, use_case="simple_task", **kwargs):
+        class _LLM:
+            def invoke(self, prompt):
+                class _Msg:
+                    # 从"就是 /data 那个盘"抽取出 path=/data
+                    content = '{"path": "/data"}'
+
+                return _Msg()
+
+        return _LLM()
+
+
+def test_clarify_uses_llm_for_natural_language():
+    """多轮澄清的回复经 LLM 抽取参数（自然语言 -> 结构化），
+    不要求使用者直输 JSON 或命令。"""
+    fake_skill = Skill(
+        name="fake_low",
+        risk="low",
+        use_case="simple_task",
+        description="low-risk demo with required arg",
+        trigger="",
+        execute=lambda s: {"echo": (s.get("skill_args") or {}).get("path")},
+        path="",
+        required_args=["path"],
+    )
+    skills = {"fake_low": fake_skill}
+
+    def fake_planner(state):
+        return {
+            "selected_skill": "fake_low",
+            "skill_args": {},
+            "risk_level": "low",
+            "command": {"skill": "fake_low", "args": {}},
+        }
+
+    set_executor(LocalExecutor())
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    saver = SqliteSaver(conn)
+    graph = build_graph(
+        skills,
+        router=_FakeRouter(),
+        executor=LocalExecutor(),
+        checkpointer=saver,
+        planner_node=fake_planner,
+        clarify_node=build_clarify_node(skills, _FakeRouter()),
+        executor_node=build_executor_node(skills),
+    )
+    cfg = {"configurable": {"thread_id": "t7"}}
+
+    graph.invoke({"user_input": "跑一下 fake_low"}, cfg)
+    snap = graph.get_state(cfg)
+    assert snap.next
+    assert snap.tasks[0].interrupts[0].value["type"] == "clarification_request"
+
+    # 用户用自然语言回复（不是 JSON、也不是命令）
+    resumed = graph.invoke(Command(resume="就是 /data 那个盘"), cfg)
+    assert resumed["approved"] is True
+    assert resumed["execution_result"]["echo"] == "/data"

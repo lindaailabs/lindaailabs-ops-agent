@@ -39,7 +39,7 @@ def build_graph(
     """
     set_executor(executor)  # 确保技能内 get_executor() 拿到正确的后端
     planner = planner_node or build_planner_node(skills, router)
-    clarify = clarify_node or build_clarify_node(skills)
+    clarify = clarify_node or build_clarify_node(skills, router)
     exe = executor_node or build_executor_node(skills)
 
     g = StateGraph(OpsAgentState)

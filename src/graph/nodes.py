@@ -10,6 +10,7 @@
 resume 值错位问题。
 """
 import json
+import re
 from typing import Any, Callable, Dict, List, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -96,14 +97,49 @@ def build_planner_node(
     return planner
 
 
+def _extract_args_with_llm(
+    router, skill_name: str, missing: List[str], reply_text: str
+) -> Optional[Dict[str, Any]]:
+    """用 LLM 从自然语言回复中抽取缺失参数。
+
+    多轮澄清的核心：用户用自然语言回复（如"就是 /data 那个盘"），由 LLM 抽取成
+    结构化参数（{"path": "/data"}）。失败返回 None，交由规则解析兜底。
+    只产出 Skill 声明的 required_args 对应键值，不允许注入任意字段。
+    """
+    if router is None:
+        return None
+    try:
+        llm = router.get(use_case="simple_task")
+        prompt = (
+            f"你是运维助手的参数抽取器。技能「{skill_name}」需要参数：{missing}。\n"
+            f"用户刚才的回复是：\"{reply_text}\"\n"
+            f"请只输出一个 JSON 对象，键为上述参数名，值为从回复中抽取的内容，"
+            f"不要输出任何解释文字。"
+        )
+        out = llm.invoke(prompt).content
+        m = re.search(r"\{.*\}", out, re.DOTALL)
+        if not m:
+            return None
+        obj = json.loads(m.group(0))
+        if isinstance(obj, dict):
+            return {k: obj[k] for k in missing if k in obj}
+        return None
+    except Exception:
+        return None
+
+
 def build_clarify_node(
     skills: Dict[str, Skill],
+    router=None,
 ) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
     """澄清节点：若 Skill 的 required_args 未齐，则 interrupt 收集缺失参数。
 
     多轮机制：首次运行检测到缺失 -> interrupt(clarification_request) 挂起；
     用户通过 /resume 回复后，节点重跑，interrupt() 直接返回回复，合并进 skill_args
     并返回（状态落库），随后流转到 execute 节点。
+
+    回复理解：优先用 LLM 从自然语言抽取结构化参数（不让使用者直输命令/JSON）；
+    规则解析与 LLM 抽取失败时兜底。JSON 回复会被过滤为仅 Skill 声明的参数，防注入。
     """
 
     def clarify_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -125,7 +161,18 @@ def build_clarify_node(
             }
         )
         # ---- resume 之后才执行：合并用户回复 ----
-        merged = {**args, **_merge_clarification(reply, missing)}
+        # 使用者只说自然语言，不直输命令/JSON；结构化参数一律由 LLM 或规则抽取，
+        # 且只允许 Skill 声明的 required_args（+host），杜绝任意字段注入。
+        allowed = set(skill.required_args) | set(args.keys()) | {"host"}
+        if isinstance(reply, dict):
+            merged = {**args, **{k: v for k, v in reply.items() if k in allowed}}
+        else:
+            merged = {**args}
+            llm_extra = _extract_args_with_llm(router, skill.name, missing, str(reply))
+            if llm_extra:
+                merged.update(llm_extra)
+            else:
+                merged.update(_merge_clarification(reply, missing))
         return {"skill_args": merged}
 
     return clarify_node
