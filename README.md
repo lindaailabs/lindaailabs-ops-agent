@@ -51,11 +51,57 @@ python -m src.main
 3. 禁止在 `interrupt()` 之前执行副作用（Shell/写库/发请求必须在 resume 之后）。
 4. 禁止 `eval()`/`exec()` 加载 Skill（仅 `importlib` + frontmatter 安全解析）。
 
+## 模型配置（config/settings.yaml）
+模型不在代码里写死，统一在 `config/settings.yaml` 的 `models:` 列表维护，运行时由 `ModelRouter` 按 `use_case` 选择并实例化（凭证用 `${ENV_VAR}` 占位，由 python-dotenv 解析，禁止硬编码明文）。
+
+```yaml
+models:
+  - name: "qwen-turbo"
+    type: "openai"
+    api_key: "${OPENAI_API_KEY}"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    use_case: "simple_task"        # 简单任务路由到此模型
+  - name: "gpt-4o"
+    type: "openai"
+    api_key: "${OPENAI_API_KEY}"
+    base_url: "https://api.openai.com/v1"
+    use_case: "complex_reasoning"  # 复杂推理（如规划器选 Skill）路由到此模型
+```
+
+- 切换/新增模型：在 `models:` 下加一项，填 `name` / `type` / `api_key` / `base_url` / `use_case`，无需改代码。
+- `use_case` 是路由键：规划器（`planner` 节点）固定使用 `complex_reasoning`；其余能力可按需在 `router.get(use_case=...)` 调用时指定。
+- 凭证只走 `${ENV_VAR}` + `.env`：复制 `.env.example` 为 `.env` 填 `OPENAI_API_KEY` 即可，`.env` 已被 `.gitignore` 忽略。
+
 ## 路由约定
 - 规划器（LLM 工具路由）：Skill 的 `SKILL.md` frontmatter 转成 tool schema，由 ChatModel 选择；tool 参数由该 Skill 的 `required_args` + `host` 动态生成。
 - 风险分级：`risk` 由 Skill 静态声明（`low`/`high`），`high` 触发审批中断。
 - **多轮澄清**：Skill 声明 `required_args`（如 `disk_cleanup` 的 `path`）。若规划器未带齐，`clarify` 节点 `interrupt()` 抛出 `clarification_request` 反问；用户经 `/resume` 回复后合并参数并继续。该机制与风险等级解耦——低风险技能缺参数也会先澄清，但不触发审批。
 - 执行后端：Skill 通过 `get_executor().run(cmd)` 执行，local/ssh 零侵入切换。
+
+## 审核触发规则与运维场景
+**是否触发人工审核，唯一依据是 Skill 自身声明的 `risk` 字段，与"通过对话触发还是定时/CLI 直接触发"无关。**
+
+| 任务风险 | 对话触发（`/chat`） | 定时任务 / CLI 直触发 | 是否审核 |
+|---|---|---|---|
+| `low`（简单） | 解析后一步执行 | `python -m src.cli --skill <name>` 直接跑 | ❌ 不审核 |
+| `high`（复杂） | 解析后挂起审核节点 | CLI 需 `--yes` 或交互确认 | ✅ 触发审核 |
+
+要点：
+- **简单任务**：人工在对话里说一句、或定时任务 / CLI 直接调，都**直执行、不进审核节点**。
+- **复杂任务**：无论哪种入口，都会先 `interrupt()` 挂起，等人工放行（`/approve` 或 CLI `--yes` / 交互确认）后才产生副作用。
+
+### 日常运维场景示例
+**简单（不触发审核，一步直达）：**
+- "查下 web-01 的磁盘使用率" → `check_disk_usage`（`low`），直接返回 `df -h` 结果。
+- 定时巡检：每 5 分钟 `python -m src.cli --skill check_disk_usage`，静默直执行、无需审批。
+- "看下 192.168.1.10 的内存占用" → 类似只读巡检 Skill（`low`），对话 / 定时均可直跑。
+
+**复杂（触发审核节点，需人工放行）：**
+- "清理 /data 下 30 天前的日志" → `disk_cleanup`（`high`），先 `pending_approval`，审批通过才执行。
+- "重启 nginx 服务" → 高危 Skill（`high`），无论对话还是 CLI 都先过审核。
+- 批量删表 / kill 进程 / 修改防火墙规则 → 均声明 `risk: high`，强制人工确认。
+
+> 注意：多轮澄清（缺参数反问）与审核是两套独立机制。复杂任务若同时缺必填参数，会先「澄清 → 再审批 → 执行」；简单任务缺参数只会澄清、不审批。
 
 ## 多轮对话示例（HTTP）
 ```bash
