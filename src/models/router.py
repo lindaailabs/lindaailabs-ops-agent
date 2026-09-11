@@ -22,7 +22,11 @@ class ModelRouter:
 
     def get(self, use_case: str = "simple_task", **kwargs: Any) -> ChatOpenAI:
         spec = self._models.get(use_case) or next(iter(self._models.values()))
-        api_key = os.path.expandvars(spec["api_key"])  # 解析 ${OPENAI_API_KEY}
+        api_key = os.path.expandvars(spec.get("api_key", ""))  # 解析 ${OPENAI_API_KEY}
+        if not api_key or api_key.startswith("${"):
+            raise ValueError(
+                f"模型 use_case={use_case} 未配置可用 api_key，请检查 settings.yaml 或环境变量"
+            )
         return ChatOpenAI(
             model=spec["name"],
             api_key=api_key,

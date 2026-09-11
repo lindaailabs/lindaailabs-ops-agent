@@ -24,7 +24,11 @@ tests/                    # Skill 加载 & HITL 链路测试
 
 ## 快速开始
 ```bash
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+# Linux/macOS
+source .venv/bin/activate
+# Windows PowerShell
+# .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 cp .env.example .env      # 填入 OPENAI_API_KEY
 python -m src.main        # 启动 :8000
@@ -36,7 +40,15 @@ python -m src.main        # 启动 :8000
 2. `config/settings.yaml` 的 `skill_dir` 字段；
 3. 默认值 `./skills`。
 
-以上取值均支持 `${ENV_VAR}` 与 `~` 展开。示例：
+以上取值均支持 `${ENV_VAR}` 与 `~` 展开；相对路径按 `ops-agent` 项目根解析。默认配置假设两个仓库是兄弟目录：
+
+```text
+workspace/
+  lindaailabs-ops-agent/
+  lindaailabs-skills/
+```
+
+示例：
 ```bash
 # Linux
 export SKILL_DIR=~/lindaailabs-skills
@@ -127,7 +139,8 @@ curl -X POST localhost:8000/approve -H 'Content-Type: application/json' \
 
 ## 测试
 ```bash
-pytest
+python -m pytest
+python -m mypy src
 ```
 
 ## 手动触发（绕过 LLM，无需 API Key）

@@ -50,6 +50,9 @@ def main() -> int:
     except json.JSONDecodeError as exc:
         print(f"[ERROR] --args 不是合法 JSON: {exc}")
         return 2
+    if not isinstance(skill_args, dict):
+        print("[ERROR] --args 必须是 JSON 对象，如 '{\"path\":\"/tmp\"}'")
+        return 2
 
     state = bootstrap()
     skills = state["skills"]
@@ -59,6 +62,11 @@ def main() -> int:
         return 1
 
     skill = skills[args.skill]
+    missing = [name for name in skill.required_args if not skill_args.get(name)]
+    if missing:
+        print(f"[ERROR] Skill {skill.name} 缺少必填参数: {', '.join(missing)}")
+        print(f"        请用 --args 传入，例如: --args '{{\"{missing[0]}\":\"/tmp\"}}'")
+        return 2
 
     if skill.risk == "high":
         if not _confirm_high_risk(skill.name, skill_args, auto_yes=args.yes):

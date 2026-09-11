@@ -5,12 +5,10 @@
 服务均用 Command(resume=...) 恢复图执行。Phase 2 将把 /approve 替换为飞书/钉钉回调（需验签）。
 """
 import os
-import sqlite3
 import sys
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
-from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 # 将项目根加入 sys.path，使 skills 内 `from src.executor import ...` 可解析
@@ -28,6 +26,28 @@ app = FastAPI(title="Ops Agent")
 STATE = bootstrap()
 
 
+def _format_graph_response(thread_id: str, config: dict, result: dict) -> dict:
+    """Return a stable HTTP payload for completed or interrupted graph runs."""
+    snapshot = STATE["graph"].get_state(config)
+    if not snapshot.next:
+        return {"status": "done", "answer": result.get("final_answer")}
+
+    task = snapshot.tasks[0] if snapshot.tasks else None
+    interrupt_val = task.interrupts[0].value if task and task.interrupts else None
+    itype = (interrupt_val or {}).get("type", "approval_request")
+    if itype == "clarification_request":
+        return {
+            "status": "pending_clarification",
+            "thread_id": thread_id,
+            "clarification_request": interrupt_val,
+        }
+    return {
+        "status": "pending_approval",
+        "thread_id": thread_id,
+        "approval_request": interrupt_val,
+    }
+
+
 @app.post("/chat")
 def chat(payload: dict):
     thread_id = payload.get("thread_id", "default")
@@ -41,25 +61,7 @@ def chat(payload: dict):
         },
         config,
     )
-
-    # 判断是否处于中断（待审批 / 待澄清）
-    snapshot = STATE["graph"].get_state(config)
-    if snapshot.next:  # 还有后续节点 -> 被 interrupt 挂起
-        task = snapshot.tasks[0] if snapshot.tasks else None
-        interrupt_val = task.interrupts[0].value if task and task.interrupts else None
-        itype = (interrupt_val or {}).get("type", "approval_request")
-        if itype == "clarification_request":
-            return {
-                "status": "pending_clarification",
-                "thread_id": thread_id,
-                "clarification_request": interrupt_val,
-            }
-        return {
-            "status": "pending_approval",
-            "thread_id": thread_id,
-            "approval_request": interrupt_val,
-        }
-    return {"status": "done", "answer": result.get("final_answer")}
+    return _format_graph_response(thread_id, config, result)
 
 
 @app.post("/resume")
@@ -72,7 +74,7 @@ def resume(payload: dict):
     thread_id = payload["thread_id"]
     config = {"configurable": {"thread_id": thread_id}}
     result = STATE["graph"].invoke(Command(resume=payload.get("response")), config)
-    return {"status": "done", "answer": result.get("final_answer")}
+    return _format_graph_response(thread_id, config, result)
 
 
 @app.post("/approve")
@@ -84,7 +86,7 @@ def approve(payload: dict):
         "comment": payload.get("comment", ""),
     }
     result = STATE["graph"].invoke(Command(resume=decision), config)
-    return {"status": "done", "answer": result.get("final_answer")}
+    return _format_graph_response(thread_id, config, result)
 
 
 @app.post("/reload_skills")

@@ -51,9 +51,19 @@ class SkillLoader:
         meta = self._parse_frontmatter(md_path)
         if not meta.get("name"):
             raise ValueError(f"{md_path} 缺少 name 字段")
+        risk = str(meta.get("risk", "low")).lower()
+        if risk not in {"low", "high"}:
+            raise ValueError(f"{md_path} risk 必须是 low 或 high")
+        required_args = meta.get("required_args", []) or []
+        if not isinstance(required_args, list) or not all(
+            isinstance(item, str) and item for item in required_args
+        ):
+            raise ValueError(f"{md_path} required_args 必须是字符串列表")
 
         # importlib 动态加载（不污染 sys.modules）
         spec = importlib.util.spec_from_file_location(f"skill_{meta['name']}", py_path)
+        if spec is None or spec.loader is None:
+            raise ValueError(f"无法加载 Skill executor: {py_path}")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 
@@ -63,13 +73,13 @@ class SkillLoader:
 
         return Skill(
             name=meta["name"],
-            risk=str(meta.get("risk", "low")).lower(),
+            risk=risk,
             use_case=meta.get("use_case", "simple_task"),
             description=meta.get("description", ""),
             trigger=meta.get("trigger", ""),
             execute=execute,
             path=skill_path,
-            required_args=list(meta.get("required_args", []) or []),
+            required_args=list(required_args),
         )
 
     @staticmethod
@@ -81,4 +91,7 @@ class SkillLoader:
         end = text.find("---", 3)
         if end == -1:
             raise ValueError(f"{md_path} frontmatter 未闭合")
-        return yaml.safe_load(text[3:end])
+        meta = yaml.safe_load(text[3:end])
+        if not isinstance(meta, dict):
+            raise ValueError(f"{md_path} frontmatter 必须是 YAML 对象")
+        return meta

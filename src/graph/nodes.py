@@ -166,7 +166,10 @@ def build_clarify_node(
     """
 
     def clarify_node(state: Dict[str, Any]) -> Dict[str, Any]:
-        skill = skills.get(state.get("selected_skill"))
+        selected_skill = state.get("selected_skill")
+        if not isinstance(selected_skill, str):
+            return {"error": "selected_skill 缺失"}
+        skill = skills.get(selected_skill)
         if skill is None:
             return {"error": "selected_skill 缺失"}
 
@@ -212,7 +215,10 @@ def build_executor_node(
     """
 
     def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
-        skill = skills.get(state.get("selected_skill"))
+        selected_skill = state.get("selected_skill")
+        if not isinstance(selected_skill, str):
+            return {"error": "selected_skill 缺失"}
+        skill = skills.get(selected_skill)
         if skill is None:
             return {"error": "selected_skill 缺失"}
 
