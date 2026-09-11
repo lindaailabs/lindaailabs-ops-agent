@@ -2,16 +2,19 @@
 # 凭证使用 ${ENV_VAR} 占位，运行时由 python-dotenv 解析，禁止硬编码明文
 
 # 多模型池（按 use_case 路由）
+# url/name/key 三件套全部由环境变量注入，便于不改动本文件即可切换 OpenAI 兼容协议服务商。
+# 同一地址的两个 use_case 默认共用同一套 env；如需为 complex_reasoning 单独指定模型，
+# 在 .env 中增加 OPENAI_MODEL_REASONING / OPENAI_BASE_URL_REASONING 并在下方覆盖即可。
 models:
-  - name: "qwen-turbo"
+  - name: "${OPENAI_MODEL}"
     type: "openai"
     api_key: "${OPENAI_API_KEY}"
-    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    base_url: "${OPENAI_BASE_URL}"
     use_case: "simple_task"        # 简单任务
-  - name: "gpt-4o"
+  - name: "${OPENAI_MODEL}"
     type: "openai"
     api_key: "${OPENAI_API_KEY}"
-    base_url: "https://api.openai.com/v1"
+    base_url: "${OPENAI_BASE_URL}"
     use_case: "complex_reasoning"  # 复杂推理
 
 # 动态 Skill 加载目录（开发期指向独立 skills 仓库）

@@ -23,13 +23,16 @@ class ModelRouter:
     def get(self, use_case: str = "simple_task", **kwargs: Any) -> ChatOpenAI:
         spec = self._models.get(use_case) or next(iter(self._models.values()))
         api_key = os.path.expandvars(spec.get("api_key", ""))  # 解析 ${OPENAI_API_KEY}
+        # name / base_url 同样支持 ${ENV} 占位，便于不修改 yaml 即可切换协议服务商
+        name = os.path.expandvars(spec.get("name", ""))
+        base_url = os.path.expandvars(spec.get("base_url", ""))
         if not api_key or api_key.startswith("${"):
             raise ValueError(
                 f"模型 use_case={use_case} 未配置可用 api_key，请检查 settings.yaml 或环境变量"
             )
         return ChatOpenAI(
-            model=spec["name"],
+            model=name,
             api_key=api_key,
-            base_url=spec.get("base_url"),
+            base_url=base_url or None,
             **kwargs,
         )
