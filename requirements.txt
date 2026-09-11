@@ -9,3 +9,4 @@ uvicorn>=0.29
 python-dotenv>=1.0
 pytest>=8.0
 mypy>=1.9
+psutil>=6.0,<8
