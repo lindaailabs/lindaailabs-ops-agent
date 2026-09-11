@@ -8,6 +8,7 @@
 - **多模型路由**：`config/settings.yaml` 维护模型池，按 `use_case` 实例化（凭证走 `${ENV}`，禁硬编码）。
 - **FastAPI 入口**：`/chat` 发起任务、`/resume` 通用恢复（澄清/审批）、`/approve` 审批快捷、`/reload_skills` 热加载。
 - **多轮交互**：Skill 的 `required_args` 缺失时，`clarify` 节点 `interrupt()` 反问收集；低风险一步直达，高危走「澄清 → 审批 → 执行」。
+- **连续追问**：同一会话保留最近 16 条消息和 3 次带时间的检查摘要，支持基于 PID/JAR 的指代；新一轮独立初始化执行和审批状态。
 - **手动触发 CLI**：`python -m src.cli --skill <name>` 绕过 LLM 规划器直接执行（不依赖 `OPENAI_API_KEY`，高危需 `--yes` 或交互确认）。
 
 ## 目录结构
@@ -33,6 +34,29 @@ pip install -r requirements.txt
 cp .env.example .env      # 填入 OPENAI_API_KEY
 python -m src.main        # 启动 :8000
 ```
+
+全流程执行环境为 Linux。服务清单、CPU 和健康检查新增依赖 `psutil>=6,<8`，更新时需要同步更新两个仓库，并在运行 Agent 的虚拟环境内重新执行 `python -m pip install -r requirements.txt`，然后重启 API 或重新进入 REPL。单独热加载 Skill 不会更新 Agent 代码。
+
+## Java 服务排查
+
+| Skill | 用途 | 参数 |
+| --- | --- | --- |
+| `list_java_services` | JAR/主类、PID、运行时长、RSS、TCP 监听地址/端口 | 可选 `target` 筛选 |
+| `check_cpu_usage` | 约 1 秒 CPU 采样、1/5/15 分钟负载、I/O wait、按 CPU 排序的进程 | 可选 `target`，PID 或服务身份 |
+| `check_service_health` | 一个 Java 实例的进程状态、TCP 连通性及明确提供的 HTTP 健康接口 | 必填 `target`；可选 `health_url` |
+
+`target` 支持 PID、JAR 文件名或主类，健康检查匹配多个实例时只返回候选，需进一步指定 PID。JAR/主类是观察到的进程身份，不保证等于业务名称；不会自动推断中文业务名到英文 JAR 的映射。
+
+```bash
+python -m src.cli --skill list_java_services
+python -m src.cli --skill check_cpu_usage
+python -m src.cli --skill check_service_health --args '{"target":"1234"}'
+python -m src.cli --skill check_service_health --args '{"target":"1234","health_url":"http://127.0.0.1:8080/actuator/health"}'
+```
+
+上面的 PID 和地址仅为示例，必须替换为实际目标。HTTP 地址由用户指定，需匹配该 PID 当前可见的本机监听地址/端口；不支持凭证、查询参数、重定向或代理。没有健康接口时只报告进程与端口，TCP 连通不等于业务健康。
+
+新采集器仅支持 Linux 本机，远程 `host` 会明确拒绝。数据覆盖当前可见的 PID/网络命名空间，权限不足会标记数据不完整。采集不会修改进程，也不执行 JVM attach、线程 dump 或堆 dump。CPU 进程百分比以单核为 100%，多线程可超过 100%；短时采样不等于根因诊断。采集接口说明见 [psutil 官方文档](https://psutil.io/)。
 
 ## Skill 目录配置
 本地 Skill 目录（指向独立 `skills` 仓库）按以下优先级解析，越靠前优先级越高：
@@ -123,7 +147,7 @@ models:
 ```bash
 # 1) 用户说"清理磁盘"但未给路径 -> 触发澄清中断
 curl -X POST localhost:8000/chat -H 'Content-Type: application/json' \
-  -d '{"message":"清理一下磁盘","thread_id":"t1"}'
+  -d '{"message":"清理一下磁盘","thread_id":"t1","mode":"automated"}'
 # -> {"status":"pending_clarification","clarification_request":{"type":"clarification_request","missing":["path"],...}}
 
 # 2) 用户回复路径 -> 进入高危审批中断
@@ -134,8 +158,10 @@ curl -X POST localhost:8000/resume -H 'Content-Type: application/json' \
 # 3) 审批通过 -> 执行
 curl -X POST localhost:8000/approve -H 'Content-Type: application/json' \
   -d '{"thread_id":"t1","approved":true,"comment":"同意"}'
-# -> {"status":"done","answer":"[disk_cleanup] 执行完成：..."}
+# -> {"status":"done","answer":"清理前评估完成：/data 当前占用约 ...。本次仅执行 dry-run，没有删除任何文件。"}
 ```
+
+`answer` 是面向运维人员的摘要，不会直接返回 Skill executor 的内部 JSON。比如磁盘检查会展示检查数量、最高使用率、重点挂载点、可用空间和告警结论；清理技能会明确说明目标路径的占用量，并注明当前阶段只是 dry-run、没有删除文件。完整的 `stdout`、`stderr` 和退出码仍保存在图状态的 `execution_result` 中，供日志和排障使用。
 
 ## 测试
 ```bash
@@ -166,13 +192,17 @@ python -m src.cli --repl --mode automated
 你> 清理一下磁盘
 Agent> 需要补充参数：path（目标路径）
 >> 就是 /data 那个盘
-Agent> [disk_cleanup] 执行完成：...
+Agent> 清理前评估完成：/data 当前占用约 12G。 本次仅执行 dry-run，没有删除任何文件。
 你> exit
 ```
 
 - 多轮澄清、自然语言补参、缺参数反问等机制与 HTTP `/chat` 行为一致；
+- REPL 完成检查后继续复用会话，输入 `/new` 开始新会话；历史仅用于指代和解释，不自动重复执行。请求最新数据时重新采集。
+- HTTP `/chat` 未传 `thread_id` 时创建独立会话并在所有响应中返回 ID；后续追问沿用该 ID。待澄清/审批时使用 `/resume`，新的 `/chat` 返回 409。
 - 退出输入 `exit` / `quit` 或 `Ctrl-D`；
 - 与"手动触发"的区别：手动触发（`--skill`）绕过 LLM 规划器、按已知 skill 直跑；REPL 走完整 LLM 意图识别链路。
+
+可在同一 REPL 依次说“列出 Java 服务”“检查 order.jar 的 CPU”“检查这个服务是否存活”。规划器结合最近的 PID/JAR 结果解析指代；存在多个候选会反问。当前每轮最多执行一个 Skill，组合排查需逐步进行，尚未提供线程/GC 诊断能力。
 
 ## 服务器实测示例
 

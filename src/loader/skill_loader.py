@@ -23,6 +23,7 @@ class Skill:
     execute: Callable[[Dict[str, Any]], Dict[str, Any]]
     path: str
     required_args: List[str] = field(default_factory=list)  # 触发前必须补齐的参数
+    parameters: Dict[str, Any] = field(default_factory=dict)
 
 
 class SkillLoader:
@@ -61,6 +62,14 @@ class SkillLoader:
             raise ValueError(f"{md_path} required_args 必须是字符串列表")
 
         # importlib 动态加载（不污染 sys.modules）
+        parameters = meta.get("parameters", {})
+        if not isinstance(parameters, dict) or not all(
+            isinstance(key, str) and isinstance(value, dict)
+            and value.get("type") == "string"
+            and isinstance(value.get("description", ""), str)
+            for key, value in parameters.items()
+        ):
+            raise ValueError(f"{md_path} parameters 必须是字符串参数的 schema 映射")
         spec = importlib.util.spec_from_file_location(f"skill_{meta['name']}", py_path)
         if spec is None or spec.loader is None:
             raise ValueError(f"无法加载 Skill executor: {py_path}")
@@ -80,6 +89,7 @@ class SkillLoader:
             execute=execute,
             path=skill_path,
             required_args=list(required_args),
+            parameters=parameters,
         )
 
     @staticmethod

@@ -6,9 +6,10 @@
 """
 import os
 import sys
+import uuid
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from langgraph.types import Command
 
 # 将项目根加入 sys.path，使 skills 内 `from src.executor import ...` 可解析
@@ -30,7 +31,7 @@ def _format_graph_response(thread_id: str, config: dict, result: dict) -> dict:
     """Return a stable HTTP payload for completed or interrupted graph runs."""
     snapshot = STATE["graph"].get_state(config)
     if not snapshot.next:
-        return {"status": "done", "answer": result.get("final_answer")}
+        return {"status": "done", "thread_id": thread_id, "answer": result.get("final_answer")}
 
     task = snapshot.tasks[0] if snapshot.tasks else None
     interrupt_val = task.interrupts[0].value if task and task.interrupts else None
@@ -50,8 +51,10 @@ def _format_graph_response(thread_id: str, config: dict, result: dict) -> dict:
 
 @app.post("/chat")
 def chat(payload: dict):
-    thread_id = payload.get("thread_id", "default")
+    thread_id = payload.get("thread_id") or uuid.uuid4().hex
     config = {"configurable": {"thread_id": thread_id}}
+    if STATE["graph"].get_state(config).next:
+        raise HTTPException(status_code=409, detail="本会话仍待恢复，请调用 /resume 或使用新的 thread_id。")
     result = STATE["graph"].invoke(
         {
             "user_input": payload["message"],

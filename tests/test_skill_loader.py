@@ -12,10 +12,16 @@ SKILLS_DIR = os.path.normpath(
 )
 
 
-def test_scan_finds_two_skills():
+def test_scan_finds_registered_skills():
     skills = SkillLoader(SKILLS_DIR).scan()
     assert "check_disk_usage" in skills
+    assert "check_memory_usage" in skills
     assert "disk_cleanup" in skills
+    for name in ("list_java_services", "check_cpu_usage", "check_service_health"):
+        assert skills[name].risk == "low"
+        assert skills[name].parameters["target"]["type"] == "string"
+    assert skills["check_service_health"].required_args == ["target"]
+    assert "health_url" in skills["check_service_health"].parameters
 
 
 def test_risk_levels():

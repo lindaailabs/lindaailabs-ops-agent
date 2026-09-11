@@ -9,9 +9,11 @@
     python -m src.cli --skill disk_cleanup --args '{"path":"/tmp"}' --yes
 """
 import argparse
+import importlib
 import json
 import os
 import sys
+from typing import Any
 
 # 将项目根加入 sys.path，使 skills 内 `from src.executor import ...` 可解析
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,18 +23,20 @@ if ROOT not in sys.path:
 from dotenv import load_dotenv  # noqa: E402
 from langgraph.types import Command  # noqa: E402
 
+_openai_module: Any = None
 try:  # 仅在 REPL 走 LLM 时用于把底层错误翻译为可读提示
-    import openai
+    _openai_module = importlib.import_module("openai")
 except Exception:  # pragma: no cover
-    openai = None
+    pass
 
 from src.api.bootstrap import bootstrap  # noqa: E402
+from src.graph.presentation import format_execution_result  # noqa: E402
 
 try:  # langgraph 不同版本 interrupt 行为略有差异，做防御性兼容
-    from langgraph.errors import GraphInterrupt
+    from langgraph import errors as _langgraph_errors
+    _graph_interrupt_type: Any = getattr(_langgraph_errors, "GraphInterrupt", None)
 except Exception:  # pragma: no cover
-    class GraphInterrupt(Exception):
-        pass
+    _graph_interrupt_type = None
 
 load_dotenv()
 
@@ -81,16 +85,15 @@ def _drive_turn(graph, config, payload):
     """
     try:
         graph.invoke(payload, config)
-    except GraphInterrupt:
-        pass
     except Exception as exc:  # LLM/网络/鉴权错误：别让 REPL 直接崩栈
-        if openai is not None and isinstance(exc, openai.APIError):
-            return "error", _format_llm_error(exc)
-        # langchain 可能把 openai 异常再包一层
-        cause = getattr(exc, "__cause__", None) or exc
-        if openai is not None and isinstance(cause, openai.APIError):
-            return "error", _format_llm_error(cause)
-        return "error", f"执行出错 [{type(exc).__name__}]: {exc}"
+        if _graph_interrupt_type is None or not isinstance(exc, _graph_interrupt_type):
+            if _openai_module is not None and isinstance(exc, _openai_module.APIError):
+                return "error", _format_llm_error(exc)
+            # langchain 可能把 openai 异常再包一层
+            cause = getattr(exc, "__cause__", None) or exc
+            if _openai_module is not None and isinstance(cause, _openai_module.APIError):
+                return "error", _format_llm_error(cause)
+            return "error", f"执行出错 [{type(exc).__name__}]: {exc}"
     snap = graph.get_state(config)
     if not snap.next:
         return "done", snap.values.get("final_answer")
@@ -114,17 +117,16 @@ def run_repl(state, mode: str = "interactive") -> int:
     graph = state["graph"]
     print("=" * 54)
     print("Ops Agent 对话模式（不走 HTTP 端口，直接对接 LLM 多轮）")
-    print(f"模式: {mode}   |   输入 exit / quit 退出")
+    print(f"模式: {mode}   |   输入 exit / quit 退出，/new 开始新会话")
     base = os.environ.get("OPENAI_BASE_URL", "(未设置)")
     model = os.environ.get("OPENAI_MODEL", "(未设置)")
     key_state = "已设置" if os.environ.get("OPENAI_API_KEY") else "未设置"
     print(f"LLM: base_url={base}  model={model}  api_key={key_state}")
     print("=" * 54)
     phase = "new"  # new（新话题）| mid（澄清/审批进行中）
-    config = None
+    config = {"configurable": {"thread_id": f"repl-{uuid.uuid4().hex}"}}
     while True:
         if phase == "new":
-            config = {"configurable": {"thread_id": f"repl-{uuid.uuid4().hex[:8]}"}}
             prompt = "你> "
         else:
             prompt = ">> "
@@ -139,13 +141,30 @@ def run_repl(state, mode: str = "interactive") -> int:
             break
         if not line:
             continue
+        if line == "/new":
+            config = {"configurable": {"thread_id": f"repl-{uuid.uuid4().hex}"}}
+            phase = "new"
+            print("Agent> 已开始新会话。")
+            continue
 
+        payload: Any
         if phase == "new":
             payload = {"user_input": line, "mode": mode}
         else:
             payload = Command(resume=line)  # 澄清补参数用自然语言文本
 
         status, data = _drive_turn(graph, config, payload)
+        while status == "approval":
+            request = data or {}
+            print("Agent> 待审批：", request.get("skill"), request.get("command"))
+            try:
+                ans = input("是否批准? [y/N] ").strip().lower()
+            except EOFError:
+                print("\n再见，操作仍待审批。")
+                return 0
+            status, data = _drive_turn(
+                graph, config, Command(resume={"approved": ans in ("y", "yes"), "comment": ans})
+            )
 
         if status == "error":
             print("Agent> ⚠️", data)
@@ -158,13 +177,6 @@ def run_repl(state, mode: str = "interactive") -> int:
             msg = data.get("message") or data.get("clarification_request") or data
             print("Agent>", msg)
             phase = "mid"
-        else:  # approval（仅 automated 模式会出现）
-            ans = input("Agent> 高危操作需审批，是否批准? [y/N] ").strip().lower()
-            status2, data2 = _drive_turn(
-                graph, config, Command(resume={"approved": ans in ("y", "yes"), "comment": ans})
-            )
-            print("Agent>", data2 or "(无输出)")
-            phase = "new"
     return 0
 
 
@@ -217,7 +229,7 @@ def main() -> int:
     print(f"[RUN] 执行 Skill: {skill.name} (risk={skill.risk})")
     result = skill.execute({"skill_args": skill_args})
     print("[RESULT]")
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(format_execution_result(skill.name, result))
     return 0
 
 

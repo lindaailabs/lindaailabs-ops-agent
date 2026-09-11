@@ -13,6 +13,7 @@ from src.graph.nodes import (
     finalize_node,
 )
 from src.graph.state import OpsAgentState
+from src.graph.conversation import prepare_turn, remember_turn
 from src.loader.skill_loader import Skill
 from src.models.router import ModelRouter
 
@@ -51,13 +52,16 @@ def build_graph(
     exe = executor_node or build_executor_node(skills)
 
     g = StateGraph(OpsAgentState)
+    g.add_node("prepare", prepare_turn)
     g.add_node("planner", planner)
     g.add_node("clarify", clarify)
     g.add_node("execute", exe)
     g.add_node("abort", lambda s: {"final_answer": s.get("final_answer") or "操作被拒绝"})
     g.add_node("finalize", finalize_node)
+    g.add_node("remember", remember_turn)
 
-    g.add_edge(START, "planner")
+    g.add_edge(START, "prepare")
+    g.add_edge("prepare", "planner")
     g.add_conditional_edges(
         "planner",
         _route_after_planner,
@@ -67,7 +71,8 @@ def build_graph(
     g.add_conditional_edges(
         "execute", _route_after_execute, {"abort": "abort", "finalize": "finalize"}
     )
-    g.add_edge("abort", END)
-    g.add_edge("finalize", END)
+    g.add_edge("abort", "remember")
+    g.add_edge("finalize", "remember")
+    g.add_edge("remember", END)
 
     return g.compile(checkpointer=checkpointer)

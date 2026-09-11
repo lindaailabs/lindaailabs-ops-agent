@@ -7,7 +7,9 @@ from typing import Any, Dict, List, Optional, TypedDict
 
 class OpsAgentState(TypedDict, total=False):
     user_input: str                                   # 用户原始请求
-    messages: List[Dict[str, Any]]                    # 对话历史（预留）
+    messages: List[Dict[str, Any]]                    # 最近 16 条对话消息
+    observations: List[Dict[str, Any]]                # 最近 3 次检查摘要，含采集时间
+    clarification_messages: List[Dict[str, Any]]
     selected_skill: Optional[str]                     # 规划器选中的 Skill 名
     skill_args: Dict[str, Any]                        # 传给 Skill 的参数
     risk_level: str                                   # "low" | "high"，来自 Skill 静态声明
