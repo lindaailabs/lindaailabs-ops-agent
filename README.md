@@ -37,10 +37,10 @@ python -m src.main        # 启动 :8000
 
 以上取值均支持 `${ENV_VAR}` 与 `~` 展开。示例：
 ```bash
-# Windows
-set SKILL_DIR=D:/path/to/lindaailabs-skills
-# macOS / Linux
+# Linux
 export SKILL_DIR=~/lindaailabs-skills
+# 或任意绝对路径
+export SKILL_DIR=/opt/lindaailabs-skills
 python -m src.main
 ```
 

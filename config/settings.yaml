@@ -17,7 +17,7 @@ models:
 # 动态 Skill 加载目录（开发期指向独立 skills 仓库）
 # 可被环境变量 SKILL_DIR 覆盖（生产推荐），支持 ${ENV_VAR} 与 ~ 展开；
 # 未显式配置且未设 SKILL_DIR 时回退到默认值 ./skills。
-skill_dir: "D:/workspace/lindaailabs-skills"
+skill_dir: "~/lindaailabs-skills"
 
 # 执行后端：local（本地 subprocess）| ssh（预留）
 executor:
