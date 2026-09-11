@@ -149,6 +149,31 @@ python -m src.cli --skill check_disk_usage
 python -m src.cli --skill disk_cleanup --args '{"path":"/tmp"}' --yes
 ```
 
+## 对话 REPL（不起端口，直接对接 LLM 多轮）
+
+不想起 HTTP 服务时，可用 REPL 模式在终端直接与 Agent 多轮对话。它复用与 `/chat` **完全相同**的 graph（planner + clarify 走 LLM + executor），只是以 stdin/stdout 驱动，无需监听端口、无需前端。
+
+```bash
+# 默认 interactive：人在终端即视为已授权，高危技能直接执行不二次审批
+python -m src.cli --repl
+
+# automated：演示审批闸门（高危会要求终端内 y/N 确认）
+python -m src.cli --repl --mode automated
+```
+
+对话示例（interactive）：
+```
+你> 清理一下磁盘
+Agent> 需要补充参数：path（目标路径）
+>> 就是 /data 那个盘
+Agent> [disk_cleanup] 执行完成：...
+你> exit
+```
+
+- 多轮澄清、自然语言补参、缺参数反问等机制与 HTTP `/chat` 行为一致；
+- 退出输入 `exit` / `quit` 或 `Ctrl-D`；
+- 与"手动触发"的区别：手动触发（`--skill`）绕过 LLM 规划器、按已知 skill 直跑；REPL 走完整 LLM 意图识别链路。
+
 ## 服务器实测示例
 
 在 Linux 测试服务器上，项目以源码形式直接运行（无需编译、无需打包），CLI 实测效果如下：
