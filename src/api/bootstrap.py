@@ -18,7 +18,14 @@ def bootstrap() -> Dict[str, Any]:
     with open(os.path.join(root, "config", "settings.yaml"), "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
-    skill_dir = os.path.expandvars(cfg.get("skill_dir", "./skills"))
+    # 本地 Skill 目录优先级：环境变量 SKILL_DIR > settings.yaml 的 skill_dir > 默认 ./skills
+    # 支持 ${ENV_VAR} 与 ~ 展开，便于跨环境（开发/生产）零改动切换。
+    skill_dir = (
+        os.environ.get("SKILL_DIR")
+        or cfg.get("skill_dir")
+        or "./skills"
+    )
+    skill_dir = os.path.expanduser(os.path.expandvars(skill_dir))
     loader = SkillLoader(skill_dir)
     skills = loader.scan()
 

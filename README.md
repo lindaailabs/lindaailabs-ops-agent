@@ -2,13 +2,12 @@
 
 基于 **LangGraph + HITL + 动态 Skill** 的 Linux 运维 Agent（Phase 1 MVP）。
 
-> 需求文档：`E:\doc\运维agent.md`
-
 ## 核心特性（Phase 1）
 - **安全可控**：高危操作经 `interrupt()` 挂起，人工审批（`Command(resume=...)`）后才执行。
-- **动态 Skill**：从独立 `skills` 仓库（默认 `D:/workspace/lindaailabs-skills`）扫描加载，无需重启。
+- **动态 Skill**：从独立 `skills` 仓库扫描加载，无需重启。目录优先级：`SKILL_DIR` 环境变量 > `config/settings.yaml` 的 `skill_dir` > 默认 `./skills`（均支持 `${ENV_VAR}` 与 `~` 展开）。
 - **多模型路由**：`config/settings.yaml` 维护模型池，按 `use_case` 实例化（凭证走 `${ENV}`，禁硬编码）。
 - **FastAPI 入口**：`/chat` 发起任务、`/approve` 处理审批（mock）、`/reload_skills` 热加载。
+- **手动触发 CLI**：`python -m src.cli --skill <name>` 绕过 LLM 规划器直接执行（不依赖 `OPENAI_API_KEY`，高危需 `--yes` 或交互确认）。
 
 ## 目录结构
 ```
@@ -30,6 +29,21 @@ cp .env.example .env      # 填入 OPENAI_API_KEY
 python -m src.main        # 启动 :8000
 ```
 
+## Skill 目录配置
+本地 Skill 目录（指向独立 `skills` 仓库）按以下优先级解析，越靠前优先级越高：
+1. 环境变量 `SKILL_DIR`（生产推荐，便于零改动切换环境）；
+2. `config/settings.yaml` 的 `skill_dir` 字段；
+3. 默认值 `./skills`。
+
+以上取值均支持 `${ENV_VAR}` 与 `~` 展开。示例：
+```bash
+# Windows
+set SKILL_DIR=D:/path/to/lindaailabs-skills
+# macOS / Linux
+export SKILL_DIR=~/lindaailabs-skills
+python -m src.main
+```
+
 ## 红线（见需求文档 §6）
 1. 禁止硬编码凭证（仅 `settings.yaml` / 环境变量）。
 2. 禁止跳过 Checkpointer（HITL 持久化底线，使用 SqliteSaver）。
@@ -44,4 +58,10 @@ python -m src.main        # 启动 :8000
 ## 测试
 ```bash
 pytest
+```
+
+## 手动触发（绕过 LLM，无需 API Key）
+```bash
+python -m src.cli --skill check_disk_usage
+python -m src.cli --skill disk_cleanup --args '{"path":"/tmp"}' --yes
 ```
