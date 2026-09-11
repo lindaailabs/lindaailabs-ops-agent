@@ -32,7 +32,15 @@ STATE = bootstrap()
 def chat(payload: dict):
     thread_id = payload.get("thread_id", "default")
     config = {"configurable": {"thread_id": thread_id}}
-    result = STATE["graph"].invoke({"user_input": payload["message"]}, config)
+    result = STATE["graph"].invoke(
+        {
+            "user_input": payload["message"],
+            # 人工对话默认 interactive（已在场=授权，不二次审批）；
+            # 定时/自动触发请显式传 "mode": "automated" 以启用审批闸门
+            "mode": payload.get("mode", "interactive"),
+        },
+        config,
+    )
 
     # 判断是否处于中断（待审批 / 待澄清）
     snapshot = STATE["graph"].get_state(config)

@@ -63,8 +63,8 @@ def test_low_risk_runs_without_approval():
 def test_high_risk_interrupt_then_approve():
     graph = _build(planner_node=_make_planner(SkillLoader(SKILLS_DIR).scan(), force_args={"path": "/tmp"}))
     cfg = {"configurable": {"thread_id": "t2"}}
-    # planner 直接给出 path，跳过澄清，仅触发审批
-    graph.invoke({"user_input": "清理一下磁盘"}, cfg)
+    # planner 直接给出 path，跳过澄清，仅触发审批（自动触发模式才挂起）
+    graph.invoke({"user_input": "清理一下磁盘", "mode": "automated"}, cfg)
     snap = graph.get_state(cfg)
     assert snap.next  # 被 interrupt 挂起
 
@@ -76,18 +76,18 @@ def test_high_risk_interrupt_then_approve():
 def test_high_risk_reject():
     graph = _build(planner_node=_make_planner(SkillLoader(SKILLS_DIR).scan(), force_args={"path": "/tmp"}))
     cfg = {"configurable": {"thread_id": "t3"}}
-    graph.invoke({"user_input": "清理一下磁盘"}, cfg)
+    graph.invoke({"user_input": "清理一下磁盘", "mode": "automated"}, cfg)
     resumed = graph.invoke(Command(resume={"approved": False, "comment": "风险太大"}), cfg)
     assert resumed["approved"] is False
     assert "拒绝" in resumed["final_answer"]
 
 
 def test_high_risk_clarify_then_approve():
-    """多轮：先缺 path -> 澄清中断 -> 补 path -> 高危审批 -> 执行。"""
+    """多轮（自动触发）：先缺 path -> 澄清中断 -> 补 path -> 高危审批 -> 执行。"""
     graph = _build()  # planner 给空 args，不含 path
     cfg = {"configurable": {"thread_id": "t4"}}
 
-    graph.invoke({"user_input": "清理一下磁盘"}, cfg)
+    graph.invoke({"user_input": "清理一下磁盘", "mode": "automated"}, cfg)
     snap = graph.get_state(cfg)
     assert snap.next
     # 第一轮中断应为澄清（缺 path）
@@ -106,6 +106,17 @@ def test_high_risk_clarify_then_approve():
     resumed = graph.invoke(Command(resume={"approved": True, "comment": "同意"}), cfg)
     assert resumed["approved"] is True
     assert resumed["final_answer"]
+
+
+def test_high_risk_interactive_runs_without_approval():
+    """人工对话交互(interactive)中高危技能直接执行，不挂起审批。"""
+    graph = _build(planner_node=_make_planner(SkillLoader(SKILLS_DIR).scan(), force_args={"path": "/tmp"}))
+    cfg = {"configurable": {"thread_id": "t6"}}
+    res = graph.invoke({"user_input": "清理一下磁盘", "mode": "interactive"}, cfg)
+    snap = graph.get_state(cfg)
+    assert not snap.next  # 未挂起，直接执行
+    assert res["approved"] is True
+    assert res["final_answer"]
 
 
 def test_low_risk_clarification():

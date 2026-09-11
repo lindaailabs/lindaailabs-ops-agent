@@ -134,21 +134,31 @@ def build_clarify_node(
 def build_executor_node(
     skills: Dict[str, Skill],
 ) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
-    """执行节点：高危操作先 interrupt 等待人工审批，副作用仅在 resume 之后发生。"""
+    """执行节点：仅当『高危 AND 自动触发(automated)』时先 interrupt 等待人工审批。
+
+    人工对话交互(interactive)中即使高危也直接执行——人类已在场即视为已授权，
+    不再二次拦截。副作用始终放在 interrupt 之后。
+    """
 
     def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         skill = skills.get(state.get("selected_skill"))
         if skill is None:
             return {"error": "selected_skill 缺失"}
 
-        # HITL：高危操作先中断。interrupt 的参数会作为"待审批请求"返回给调用方。
-        # 仅在用户通过 Command(resume=...) 恢复后，下面才会继续执行（无副作用残留）。
-        if state.get("risk_level") == "high":
+        # HITL：仅【高危 + 自动触发】才挂起审批。人工对话交互(interactive)不加闸门，
+        # 因为人类的显式请求本身就是授权。interrupt 的参数作为"待审批请求"返回调用方，
+        # 仅在用户通过 Command(resume=...) 恢复后下面才继续执行（无副作用残留）。
+        needs_approval = (
+            state.get("risk_level") == "high"
+            and state.get("mode", "interactive") == "automated"
+        )
+        if needs_approval:
             approval = interrupt(
                 {
                     "type": "approval_request",
                     "skill": state.get("selected_skill"),
                     "command": state.get("command"),
+                    "mode": "automated",
                 }
             )
             # ---- 以下为 resume 之后才执行的代码 ----

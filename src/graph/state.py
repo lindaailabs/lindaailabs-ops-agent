@@ -11,6 +11,7 @@ class OpsAgentState(TypedDict, total=False):
     selected_skill: Optional[str]                     # 规划器选中的 Skill 名
     skill_args: Dict[str, Any]                        # 传给 Skill 的参数
     risk_level: str                                   # "low" | "high"，来自 Skill 静态声明
+    mode: str                                          # "interactive" | "automated"，触发来源（人在场=interactive，无人值守=automated）
     command: Optional[Dict[str, Any]]                 # 交给执行层的指令
     execution_result: Optional[Dict[str, Any]]        # 执行结果
     approved: Optional[bool]                          # 审批结果（None=未触发/待审）

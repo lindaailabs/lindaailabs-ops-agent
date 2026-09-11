@@ -3,7 +3,7 @@
 基于 **LangGraph + HITL + 动态 Skill** 的 Linux 运维 Agent（Phase 1 MVP）。
 
 ## 核心特性（Phase 1）
-- **安全可控**：高危操作经 `interrupt()` 挂起，人工审批（`Command(resume=...)`）后才执行。
+- **安全可控**：仅「高危 + 自动触发(`mode=automated`)」经 `interrupt()` 挂起，人工审批（`Command(resume=...)`）后才执行；人工对话 / 手动 CLI 触发视为已授权，直接执行不二次拦截。
 - **动态 Skill**：从独立 `skills` 仓库扫描加载，无需重启。目录优先级：`SKILL_DIR` 环境变量 > `config/settings.yaml` 的 `skill_dir` > 默认 `./skills`（均支持 `${ENV_VAR}` 与 `~` 展开）。
 - **多模型路由**：`config/settings.yaml` 维护模型池，按 `use_case` 实例化（凭证走 `${ENV}`，禁硬编码）。
 - **FastAPI 入口**：`/chat` 发起任务、`/resume` 通用恢复（澄清/审批）、`/approve` 审批快捷、`/reload_skills` 热加载。
@@ -74,34 +74,37 @@ models:
 
 ## 路由约定
 - 规划器（LLM 工具路由）：Skill 的 `SKILL.md` frontmatter 转成 tool schema，由 ChatModel 选择；tool 参数由该 Skill 的 `required_args` + `host` 动态生成。
-- 风险分级：`risk` 由 Skill 静态声明（`low`/`high`），`high` 触发审批中断。
+- 风险分级：`risk` 由 Skill 静态声明（`low`/`high`）；**审批闸门 = `risk:high` 且 `mode:automated`**（人工对话 / 手动 CLI 为 `interactive`，不审批）。
 - **多轮澄清**：Skill 声明 `required_args`（如 `disk_cleanup` 的 `path`）。若规划器未带齐，`clarify` 节点 `interrupt()` 抛出 `clarification_request` 反问；用户经 `/resume` 回复后合并参数并继续。该机制与风险等级解耦——低风险技能缺参数也会先澄清，但不触发审批。
 - 执行后端：Skill 通过 `get_executor().run(cmd)` 执行，local/ssh 零侵入切换。
 
 ## 审核触发规则与运维场景
-**是否触发人工审核，唯一依据是 Skill 自身声明的 `risk` 字段，与"通过对话触发还是定时/CLI 直接触发"无关。**
+**审核闸门 = `risk: high` 且处于「自动触发(`mode=automated`)」模式。**
 
-| 任务风险 | 对话触发（`/chat`） | 定时任务 / CLI 直触发 | 是否审核 |
+核心原则：**人类是否在决策现场**。人工对话 / 手动 CLI 触发时人类就在场，其显式请求即视为授权，无需二次拦截；只有无人值守的定时 / 自动触发，才需要额外的人工审批闸门。
+
+| 触发方式 | 简单（`low`） | 复杂（`high`） | 是否进审核节点 |
 |---|---|---|---|
-| `low`（简单） | 解析后一步执行 | `python -m src.cli --skill <name>` 直接跑 | ❌ 不审核 |
-| `high`（复杂） | 解析后挂起审核节点 | CLI 需 `--yes` 或交互确认 | ✅ 触发审核 |
+| 人工对话 `/chat`（默认 `interactive`） | 直执行 | 直执行（人类已授权） | ❌ |
+| 定时任务 / 自动触发（`mode=automated`） | 直执行 | 挂起 `approval_request`，需 `/approve` 放行 | ✅ |
+| 手动 CLI（终端，人类在场） | 直执行 | 交互确认 / `--yes` 后执行 | ❌（终端即授权） |
 
 要点：
-- **简单任务**：人工在对话里说一句、或定时任务 / CLI 直接调，都**直执行、不进审核节点**。
-- **复杂任务**：无论哪种入口，都会先 `interrupt()` 挂起，等人工放行（`/approve` 或 CLI `--yes` / 交互确认）后才产生副作用。
+- **自动触发（定时任务等）**：`high` 技能先 `interrupt()` 挂起，返回 `pending_approval`，由人工经 `/approve` 或 `/resume` 放行后才产生副作用。
+- **人工对话 / 手动 CLI**：即使 `high` 也直接执行（对话里一句话、或 CLI 手动敲命令即代表已授权）。CLI 仍保留 `--yes`/交互确认作为终端内的二次确认，但不走 `interrupt()` 审批节点。
+- 切换触发模式：`/chat` 默认 `interactive`；定时任务调用时显式传 `"mode": "automated"` 即可启用审批闸门。
 
 ### 日常运维场景示例
-**简单（不触发审核，一步直达）：**
-- "查下 web-01 的磁盘使用率" → `check_disk_usage`（`low`），直接返回 `df -h` 结果。
+**简单（任何方式都不触发审核，一步直达）：**
+- "查下 web-01 的磁盘使用率" → `check_disk_usage`（`low`），对话 / 定时均直接返回 `df -h`。
 - 定时巡检：每 5 分钟 `python -m src.cli --skill check_disk_usage`，静默直执行、无需审批。
-- "看下 192.168.1.10 的内存占用" → 类似只读巡检 Skill（`low`），对话 / 定时均可直跑。
 
-**复杂（触发审核节点，需人工放行）：**
-- "清理 /data 下 30 天前的日志" → `disk_cleanup`（`high`），先 `pending_approval`，审批通过才执行。
-- "重启 nginx 服务" → 高危 Skill（`high`），无论对话还是 CLI 都先过审核。
-- 批量删表 / kill 进程 / 修改防火墙规则 → 均声明 `risk: high`，强制人工确认。
+**复杂（仅自动触发才需审批，人工对话 / CLI 直执行）：**
+- 人工说"清理 /data 下 30 天前的日志" → 对话交互中直接执行 `disk_cleanup`（`high`），不挂审批。
+- 定时任务触发 `disk_cleanup` → 挂起 `pending_approval`，值班人员 `/approve` 后才执行。
+- "重启 nginx" / 批量删表 / kill 进程 / 改防火墙 → 均声明 `risk: high`；自动触发走审批，人工触发直执行。
 
-> 注意：多轮澄清（缺参数反问）与审核是两套独立机制。复杂任务若同时缺必填参数，会先「澄清 → 再审批 → 执行」；简单任务缺参数只会澄清、不审批。
+> 注意：多轮澄清（缺参数反问）与审核是两套独立机制。自动触发且缺必填参数时，会先「澄清 → 再审批 → 执行」；人工对话缺参数只澄清、不审批。
 
 ## 多轮对话示例（HTTP）
 ```bash
