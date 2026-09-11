@@ -229,3 +229,44 @@ def test_clarify_uses_llm_for_natural_language():
     resumed = graph.invoke(Command(resume="就是 /data 那个盘"), cfg)
     assert resumed["approved"] is True
     assert resumed["execution_result"]["echo"] == "/data"
+
+
+def test_planner_no_match_conversational_fallback():
+    """用户问法超出已注册能力（不懂系统、问得宽泛）时，给出友好的自然语言回答而非死路。"""
+    skills = {
+        "fake_low": Skill(
+            name="fake_low",
+            risk="low",
+            use_case="simple_task",
+            description="demo",
+            trigger="",
+            execute=lambda s: {},
+            path="",
+            required_args=[],
+        )
+    }
+
+    def fake_planner(state):
+        # 模拟 planner 未命中任何 Skill：预置自然语言回答，不报 error
+        return {
+            "final_answer": "我目前能做：查磁盘、清磁盘。请说具体些。",
+            "selected_skill": None,
+        }
+
+    set_executor(LocalExecutor())
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    saver = SqliteSaver(conn)
+    graph = build_graph(
+        skills,
+        router=None,
+        executor=LocalExecutor(),
+        checkpointer=saver,
+        planner_node=fake_planner,
+    )
+    cfg = {"configurable": {"thread_id": "t8"}}
+
+    res = graph.invoke({"user_input": "你好，我该问什么"}, cfg)
+    snap = graph.get_state(cfg)
+    assert not snap.next  # 不应挂起（无澄清、无审批）
+    assert res["final_answer"]  # 有自然语言回答，不是死路错误
+

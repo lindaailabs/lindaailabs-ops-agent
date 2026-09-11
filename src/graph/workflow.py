@@ -23,6 +23,14 @@ def _route_after_execute(state: Dict[str, Any]) -> str:
     return "finalize"
 
 
+def _route_after_planner(state: Dict[str, Any]) -> str:
+    # 规划器没匹配到任何 Skill（使用者问得太宽泛 / 超出能力范围）：
+    # 直接进入 finalize，由 planner 预置的自然语言回答收尾，不报错死路。
+    if state.get("selected_skill") is None:
+        return "finalize"
+    return "clarify"
+
+
 def build_graph(
     skills: Dict[str, Skill],
     router: ModelRouter,
@@ -50,7 +58,11 @@ def build_graph(
     g.add_node("finalize", finalize_node)
 
     g.add_edge(START, "planner")
-    g.add_edge("planner", "clarify")
+    g.add_conditional_edges(
+        "planner",
+        _route_after_planner,
+        {"clarify": "clarify", "finalize": "finalize"},
+    )
     g.add_edge("clarify", "execute")
     g.add_conditional_edges(
         "execute", _route_after_execute, {"abort": "abort", "finalize": "finalize"}
