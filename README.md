@@ -148,3 +148,19 @@ python -m mypy src
 python -m src.cli --skill check_disk_usage
 python -m src.cli --skill disk_cleanup --args '{"path":"/tmp"}' --yes
 ```
+
+## 服务器实测示例
+
+在 Linux 测试服务器上，项目以源码形式直接运行（无需编译、无需打包），CLI 实测效果如下：
+
+```bash
+python -m src.cli --skill check_disk_usage
+python -m src.cli --skill disk_cleanup --args '{"path":"/data"}'
+```
+
+![服务器 CLI 实测](assets/server-cli-demo.png)
+
+- `check_disk_usage`（`risk=low`）直接执行并返回 `df -h` 结果；
+- `disk_cleanup`（`risk=high`）在终端内弹出 `[HITL]` 二次确认，输入 `n` 后执行中止，符合"人类在场授权"设计。
+
+即：`low` 技能一步直达，`high` 技能即使 CLI 触发也会在执行前要求确认，确认后才会产生副作用。
