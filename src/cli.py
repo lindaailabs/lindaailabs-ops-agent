@@ -21,6 +21,11 @@ if ROOT not in sys.path:
 from dotenv import load_dotenv  # noqa: E402
 from langgraph.types import Command  # noqa: E402
 
+try:  # 仅在 REPL 走 LLM 时用于把底层错误翻译为可读提示
+    import openai
+except Exception:  # pragma: no cover
+    openai = None
+
 from src.api.bootstrap import bootstrap  # noqa: E402
 
 try:  # langgraph 不同版本 interrupt 行为略有差异，做防御性兼容
@@ -45,18 +50,47 @@ def _confirm_high_risk(skill_name: str, args: dict, auto_yes: bool) -> bool:
     return ans in ("y", "yes")
 
 
+def _format_llm_error(exc) -> str:
+    """把 openai/langchain 底层异常翻译成可读提示，避免直接甩 traceback。"""
+    name = type(exc).__name__
+    status = getattr(exc, "status_code", None)
+    body = getattr(exc, "body", None) or getattr(exc, "message", None) or str(exc)
+    snippet = str(body).replace("\n", " ")[:240]
+    if status == 403 or "PermissionDenied" in name:
+        return (
+            "LLM 端点返回 403 拒绝（收到的是一段 HTML 拒绝页）。常见原因：\n"
+            "  1) OPENAI_BASE_URL 指向 api.openai.com，而服务器在中国大陆直连被墙；\n"
+            "  2) base_url 是需鉴权/白名单的代理，未放行该服务器出口 IP；\n"
+            "  3) OPENAI_API_KEY 无效或额度不足。\n"
+            "请核对 .env 的 OPENAI_BASE_URL / OPENAI_MODEL / OPENAI_API_KEY 是否可达且有效。\n"
+            f"响应片段: {snippet}"
+        )
+    if "Connection" in name or "Timeout" in name or "Connect" in name:
+        return f"LLM 连接失败（网络出口 / 代理问题）: {snippet}"
+    return f"LLM 调用失败 [{name}]: {snippet}"
+
+
 def _drive_turn(graph, config, payload):
     """执行一步图调用，返回 (status, data)。
 
-    status: 'done' | 'clarify' | 'approval'
+    status: 'done' | 'clarify' | 'approval' | 'error'
     - done:     图已结束，data 为 final_answer
     - clarify:  缺参数被中断，data 为 clarification_request
     - approval: 高危待审批被中断，data 为 approval_request
+    - error:    图执行中抛错（多为 LLM/网络/鉴权），data 为可读提示
     """
     try:
         graph.invoke(payload, config)
     except GraphInterrupt:
         pass
+    except Exception as exc:  # LLM/网络/鉴权错误：别让 REPL 直接崩栈
+        if openai is not None and isinstance(exc, openai.APIError):
+            return "error", _format_llm_error(exc)
+        # langchain 可能把 openai 异常再包一层
+        cause = getattr(exc, "__cause__", None) or exc
+        if openai is not None and isinstance(cause, openai.APIError):
+            return "error", _format_llm_error(cause)
+        return "error", f"执行出错 [{type(exc).__name__}]: {exc}"
     snap = graph.get_state(config)
     if not snap.next:
         return "done", snap.values.get("final_answer")
@@ -81,6 +115,10 @@ def run_repl(state, mode: str = "interactive") -> int:
     print("=" * 54)
     print("Ops Agent 对话模式（不走 HTTP 端口，直接对接 LLM 多轮）")
     print(f"模式: {mode}   |   输入 exit / quit 退出")
+    base = os.environ.get("OPENAI_BASE_URL", "(未设置)")
+    model = os.environ.get("OPENAI_MODEL", "(未设置)")
+    key_state = "已设置" if os.environ.get("OPENAI_API_KEY") else "未设置"
+    print(f"LLM: base_url={base}  model={model}  api_key={key_state}")
     print("=" * 54)
     phase = "new"  # new（新话题）| mid（澄清/审批进行中）
     config = None
@@ -109,6 +147,10 @@ def run_repl(state, mode: str = "interactive") -> int:
 
         status, data = _drive_turn(graph, config, payload)
 
+        if status == "error":
+            print("Agent> ⚠️", data)
+            phase = "new"
+            continue
         if status == "done":
             print("Agent>", data or "(无输出)")
             phase = "new"
