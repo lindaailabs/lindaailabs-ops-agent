@@ -7,8 +7,8 @@
 """
 import importlib.util
 import os
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional
 
 import yaml
 
@@ -22,6 +22,7 @@ class Skill:
     trigger: str
     execute: Callable[[Dict[str, Any]], Dict[str, Any]]
     path: str
+    required_args: List[str] = field(default_factory=list)  # 触发前必须补齐的参数
 
 
 class SkillLoader:
@@ -68,6 +69,7 @@ class SkillLoader:
             trigger=meta.get("trigger", ""),
             execute=execute,
             path=skill_path,
+            required_args=list(meta.get("required_args", []) or []),
         )
 
     @staticmethod

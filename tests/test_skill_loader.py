@@ -23,6 +23,12 @@ def test_risk_levels():
     assert skills["disk_cleanup"].risk == "high"
 
 
+def test_required_args_parsed():
+    skills = SkillLoader(SKILLS_DIR).scan()
+    assert skills["check_disk_usage"].required_args == []
+    assert skills["disk_cleanup"].required_args == ["path"]
+
+
 def test_execute_callable():
     skills = SkillLoader(SKILLS_DIR).scan()
     for s in skills.values():

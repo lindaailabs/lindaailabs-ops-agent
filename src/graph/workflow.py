@@ -6,7 +6,12 @@ from langgraph.graph import END, START, StateGraph
 
 from src.executor.base import Executor
 from src.executor.registry import set_executor
-from src.graph.nodes import build_executor_node, build_planner_node, finalize_node
+from src.graph.nodes import (
+    build_clarify_node,
+    build_executor_node,
+    build_planner_node,
+    finalize_node,
+)
 from src.graph.state import OpsAgentState
 from src.loader.skill_loader import Skill
 from src.models.router import ModelRouter
@@ -24,24 +29,29 @@ def build_graph(
     executor: Executor,
     checkpointer: SqliteSaver,
     planner_node: Optional[Callable] = None,
+    clarify_node: Optional[Callable] = None,
     executor_node: Optional[Callable] = None,
 ):
     """组装并编译 StateGraph。
 
-    planner_node / executor_node 可注入（测试时替换为 fake），默认按 skills/router 构建。
+    planner_node / clarify_node / executor_node 可注入（测试时替换为 fake），
+    默认按 skills/router 构建。多轮交互链路：planner -> clarify -> execute。
     """
     set_executor(executor)  # 确保技能内 get_executor() 拿到正确的后端
     planner = planner_node or build_planner_node(skills, router)
+    clarify = clarify_node or build_clarify_node(skills)
     exe = executor_node or build_executor_node(skills)
 
     g = StateGraph(OpsAgentState)
     g.add_node("planner", planner)
+    g.add_node("clarify", clarify)
     g.add_node("execute", exe)
     g.add_node("abort", lambda s: {"final_answer": s.get("final_answer") or "操作被拒绝"})
     g.add_node("finalize", finalize_node)
 
     g.add_edge(START, "planner")
-    g.add_edge("planner", "execute")
+    g.add_edge("planner", "clarify")
+    g.add_edge("clarify", "execute")
     g.add_conditional_edges(
         "execute", _route_after_execute, {"abort": "abort", "finalize": "finalize"}
     )

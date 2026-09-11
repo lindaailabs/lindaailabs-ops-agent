@@ -6,7 +6,8 @@
 - **安全可控**：高危操作经 `interrupt()` 挂起，人工审批（`Command(resume=...)`）后才执行。
 - **动态 Skill**：从独立 `skills` 仓库扫描加载，无需重启。目录优先级：`SKILL_DIR` 环境变量 > `config/settings.yaml` 的 `skill_dir` > 默认 `./skills`（均支持 `${ENV_VAR}` 与 `~` 展开）。
 - **多模型路由**：`config/settings.yaml` 维护模型池，按 `use_case` 实例化（凭证走 `${ENV}`，禁硬编码）。
-- **FastAPI 入口**：`/chat` 发起任务、`/approve` 处理审批（mock）、`/reload_skills` 热加载。
+- **FastAPI 入口**：`/chat` 发起任务、`/resume` 通用恢复（澄清/审批）、`/approve` 审批快捷、`/reload_skills` 热加载。
+- **多轮交互**：Skill 的 `required_args` 缺失时，`clarify` 节点 `interrupt()` 反问收集；低风险一步直达，高危走「澄清 → 审批 → 执行」。
 - **手动触发 CLI**：`python -m src.cli --skill <name>` 绕过 LLM 规划器直接执行（不依赖 `OPENAI_API_KEY`，高危需 `--yes` 或交互确认）。
 
 ## 目录结构
@@ -51,9 +52,28 @@ python -m src.main
 4. 禁止 `eval()`/`exec()` 加载 Skill（仅 `importlib` + frontmatter 安全解析）。
 
 ## 路由约定
-- 规划器（LLM 工具路由）：Skill 的 `SKILL.md` frontmatter 转成 tool schema，由 ChatModel 选择。
+- 规划器（LLM 工具路由）：Skill 的 `SKILL.md` frontmatter 转成 tool schema，由 ChatModel 选择；tool 参数由该 Skill 的 `required_args` + `host` 动态生成。
 - 风险分级：`risk` 由 Skill 静态声明（`low`/`high`），`high` 触发审批中断。
+- **多轮澄清**：Skill 声明 `required_args`（如 `disk_cleanup` 的 `path`）。若规划器未带齐，`clarify` 节点 `interrupt()` 抛出 `clarification_request` 反问；用户经 `/resume` 回复后合并参数并继续。该机制与风险等级解耦——低风险技能缺参数也会先澄清，但不触发审批。
 - 执行后端：Skill 通过 `get_executor().run(cmd)` 执行，local/ssh 零侵入切换。
+
+## 多轮对话示例（HTTP）
+```bash
+# 1) 用户说"清理磁盘"但未给路径 -> 触发澄清中断
+curl -X POST localhost:8000/chat -H 'Content-Type: application/json' \
+  -d '{"message":"清理一下磁盘","thread_id":"t1"}'
+# -> {"status":"pending_clarification","clarification_request":{"type":"clarification_request","missing":["path"],...}}
+
+# 2) 用户回复路径 -> 进入高危审批中断
+curl -X POST localhost:8000/resume -H 'Content-Type: application/json' \
+  -d '{"thread_id":"t1","response":"/data"}'
+# -> {"status":"pending_approval",...}
+
+# 3) 审批通过 -> 执行
+curl -X POST localhost:8000/approve -H 'Content-Type: application/json' \
+  -d '{"thread_id":"t1","approved":true,"comment":"同意"}'
+# -> {"status":"done","answer":"[disk_cleanup] 执行完成：..."}
+```
 
 ## 测试
 ```bash
