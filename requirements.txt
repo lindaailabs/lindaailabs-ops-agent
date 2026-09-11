@@ -1,0 +1,11 @@
+# Phase 1 依赖
+langgraph>=0.2.0
+langgraph-checkpoint-sqlite>=2.0.0
+langchain-core>=0.2.0
+langchain-openai>=0.1.0
+pyyaml>=6.0
+fastapi>=0.110
+uvicorn>=0.29
+python-dotenv>=1.0
+pytest>=8.0
+mypy>=1.9

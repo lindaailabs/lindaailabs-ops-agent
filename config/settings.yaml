@@ -1,0 +1,31 @@
+# 全局配置：模型列表、Skill 目录路径、执行后端、检查点、审批方式
+# 凭证使用 ${ENV_VAR} 占位，运行时由 python-dotenv 解析，禁止硬编码明文
+
+# 多模型池（按 use_case 路由）
+models:
+  - name: "qwen-turbo"
+    type: "openai"
+    api_key: "${OPENAI_API_KEY}"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    use_case: "simple_task"        # 简单任务
+  - name: "gpt-4o"
+    type: "openai"
+    api_key: "${OPENAI_API_KEY}"
+    base_url: "https://api.openai.com/v1"
+    use_case: "complex_reasoning"  # 复杂推理
+
+# 动态 Skill 加载目录（开发期指向独立 skills 仓库；生产用环境变量覆盖）
+skill_dir: "D:/workspace/lindaailabs-skills"
+
+# 执行后端：local（本地 subprocess）| ssh（预留）
+executor:
+  type: "local"
+
+# HITL 持久化检查点
+checkpoint:
+  type: "sqlite"
+  path: "./data/checkpoints.db"
+
+# 审批方式：Phase 1 用 http_mock（/approve 接口）；Phase 2 接 feishu/dingtalk
+approval:
+  mode: "http_mock"
