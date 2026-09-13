@@ -204,18 +204,17 @@ Agent> 清理前评估完成：/data 当前占用约 12G。 本次仅执行 dry-
 
 可在同一 REPL 依次说“列出 Java 服务”“检查 order.jar 的 CPU”“检查这个服务是否存活”。规划器结合最近的 PID/JAR 结果解析指代；存在多个候选会反问。当前每轮最多执行一个 Skill，组合排查需逐步进行，尚未提供线程/GC 诊断能力。
 
-## 服务器实测示例
+## 实测示例（Linux / macOS）
 
-在 Linux 测试服务器上，项目以源码形式直接运行（无需编译、无需打包），CLI 实测效果如下：
+项目以源码形式直接运行（无需编译、无需打包），REPL 模式实测效果如下（截图运行于 macOS）：
 
 ```bash
-python -m src.cli --skill check_disk_usage
-python -m src.cli --skill disk_cleanup --args '{"path":"/data"}'
+python -m src.cli --repl --mode automated
 ```
 
-![服务器 CLI 实测](assets/server-cli-demo.png)
+![对话 REPL 实测](assets/server-cli-demo.png)
 
-- `check_disk_usage`（`risk=low`）直接执行并返回 `df -h` 结果；
-- `disk_cleanup`（`risk=high`）在终端内弹出 `[HITL]` 二次确认，输入 `n` 后执行中止，符合"人类在场授权"设计。
+- 自然语言提问「看下系统负载」→ 触发 `check_cpu_usage`，约 1 秒 CPU 采样，返回逻辑核数、1/5/15 分钟负载、I/O wait 与按 CPU 排序的进程；
+- 提问「磁盘情况呢」→ 触发 `check_disk_usage`，汇总各挂载点使用率并给出告警结论，自动跳过容量为 0 的伪挂载（如 `devfs`），不会误报 100%。
 
-即：`low` 技能一步直达，`high` 技能即使 CLI 触发也会在执行前要求确认，确认后才会产生副作用。
+采集层基于 `psutil` 实现，Linux 与 macOS 均可运行，不依赖 `free`、`df`、GNU `ps` 等平台专属命令。

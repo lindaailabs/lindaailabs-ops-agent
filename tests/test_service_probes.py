@@ -160,8 +160,9 @@ def test_probe_rejects_remote_host_without_execution():
     executor.run.assert_not_called()
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="Linux live collection")
-@pytest.mark.parametrize("operation", ["list_java_services", "check_cpu_usage"])
+@pytest.mark.skipif(sys.platform not in ("linux", "darwin"), reason="Linux/macOS live collection")
+@pytest.mark.parametrize("operation", [
+    "list_java_services", "check_cpu_usage", "check_memory_usage", "check_disk_usage"])
 def test_linux_live_collection(operation):
     completed = subprocess.run([sys.executable, str(PROBE), operation, "{}"],
                                capture_output=True, text=True, timeout=30, check=True)

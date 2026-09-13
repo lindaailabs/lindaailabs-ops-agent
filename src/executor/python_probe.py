@@ -15,8 +15,8 @@ def run_local_probe(script: Path, operation: str, state: dict) -> Dict[str, Any]
         return {"returncode": 2, "error": "当前仅支持本机采集，尚未连接远程主机。"}
     if not isinstance(get_executor(), LocalExecutor):
         return {"returncode": 2, "error": "此采集器需要 LocalExecutor。"}
-    if sys.platform != "linux":
-        return {"returncode": 2, "error": "此采集器需要在 Linux 上运行。"}
+    if sys.platform not in ("linux", "darwin"):
+        return {"returncode": 2, "error": "此采集器需要在 Linux 或 macOS 上运行。"}
     command = shlex.join([sys.executable, str(script), operation, json.dumps(args)])
     out = get_executor().run(command, timeout=30)
     if out.get("returncode") != 0:

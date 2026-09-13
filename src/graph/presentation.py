@@ -145,6 +145,108 @@ def _parse_java_processes(stdout: str) -> List[Dict[str, Any]]:
     return processes
 
 
+def _format_memory_structured(result: Dict[str, Any]) -> Optional[str]:
+    data = result.get("data") or {}
+    host = _text(result.get("host")) or "localhost"
+    lines = [f"内存与 Java 进程分析完成（目标主机：{host}）。"]
+
+    total = data.get("mem_total_bytes", 0)
+    used = data.get("mem_used_bytes", 0)
+    avail = data.get("mem_available_bytes", 0)
+    percent = data.get("mem_percent", 0)
+    if total:
+        lines.append(
+            f"系统内存：已用 {_format_bytes(used)} / {_format_bytes(total)} "
+            f"（{percent:.1f}%），可用约 {_format_bytes(avail)}。"
+        )
+        if percent >= 90:
+            lines.append("结论：系统内存处于严重紧张状态，优先检查 Java 堆、堆外内存和缓存增长。")
+        elif percent >= 80:
+            lines.append("结论：系统内存偏高，建议结合 Java 进程明细安排进一步排查。")
+        else:
+            lines.append("结论：系统内存总体尚有余量。")
+
+    swap_total = data.get("swap_total_bytes", 0)
+    swap_used = data.get("swap_used_bytes", 0)
+    if swap_total:
+        swap_percent = swap_used / swap_total * 100
+        lines.append(
+            f"Swap：已用 {_format_bytes(swap_used)} / {_format_bytes(swap_total)} "
+            f"（{swap_percent:.1f}%）。"
+        )
+        if swap_used > 0:
+            lines.append("建议：Swap 已有使用，需关注是否发生内存回收或 Java 进程抖动；不要只看堆使用率。")
+    else:
+        lines.append("Swap：未配置或未发现可用 Swap。")
+
+    processes = data.get("processes") or []
+    if not processes:
+        lines.append("Java 进程：未发现匹配的 Java 进程，或当前用户无权读取进程列表。")
+        return "\n".join(lines)
+
+    rss_total = sum(process.get("rss_bytes", 0) for process in processes)
+    lines.append(f"Java 进程：发现 {len(processes)} 个，RSS 合计约 {_format_bytes(rss_total)}。")
+    lines.append("按进程 RSS 排序的重点进程：")
+    for process in processes[:8]:
+        label = process.get("jar") or process.get("main_class") or process.get("service", "java")
+        if len(label) > 110:
+            label = label[:107] + "..."
+        lines.append(
+            f"- PID {process.get('pid')}：RSS {_format_bytes(process.get('rss_bytes', 0))}，"
+            f"占系统 {process.get('pmem', 0):.1f}%，CPU {process.get('pcpu', 0):.1f}%，"
+            f"运行 {process.get('etime', '')}；{label}"
+        )
+
+    xmx_options = [
+        option for process in processes
+        for option in process.get("jvm_options", []) if "-Xmx" in option
+    ]
+    if xmx_options:
+        lines.append("针对性建议：")
+        lines.append("- 优先对照上述 Java 进程的 RSS 与 -Xmx：RSS 明显高于堆上限时，要检查 Metaspace、DirectBuffer、线程栈和 JNI/native 内存。")
+    else:
+        lines.append("针对性建议：未从启动参数看到 -Xmx，建议为每个 Java 服务明确配置堆上限，并结合容器/主机内存预留。")
+    if any(process.get("pmem", 0) >= 20 for process in processes):
+        lines.append("- 存在单个 Java 进程占用系统内存达到 20% 以上的情况，建议优先采集该 PID 的 GC、堆外内存和线程信息。")
+    lines.append("- 当前检查只读，不会重启或修改 Java 进程；如需进一步处理，应先确认具体 PID、服务归属和变更窗口。")
+    return "\n".join(lines)
+
+
+def _format_disk_structured(result: Dict[str, Any]) -> Optional[str]:
+    data = result.get("data") or {}
+    rows = data.get("partitions") or []
+    if not rows:
+        return None
+
+    host = _text(result.get("host"))
+    lines = [
+        f"磁盘使用率检查完成（目标主机：{host}）。" if host else "磁盘使用率检查完成。",
+    ]
+    highest = rows[0]
+    lines.append(
+        f"共检查 {len(rows)} 个挂载点，当前最高使用率为 {highest['percent']}%"
+        f"（{highest['mountpoint']}）。"
+    )
+    lines.append("重点挂载点：")
+    for row in rows[:5]:
+        percent = row["percent"]
+        marker = "告警" if percent >= 80 else "正常"
+        lines.append(
+            f"- {row['mountpoint']}：已用 {percent}%，已用 {_format_bytes(row['used_bytes'])}/"
+            f"{_format_bytes(row['size_bytes'])}，可用 {_format_bytes(row['available_bytes'])}（{marker}）"
+        )
+    if len(rows) > 5:
+        lines.append(f"- 其余 {len(rows) - 5} 个挂载点未在摘要中展开。")
+    if highest["percent"] >= 90:
+        conclusion = "存在严重告警，建议立即处理空间释放或扩容。"
+    elif highest["percent"] >= 80:
+        conclusion = "存在空间告警，建议尽快检查大文件、日志和容器缓存。"
+    else:
+        conclusion = "未发现超过 80% 告警阈值的挂载点。"
+    lines.append(f"结论：{conclusion}")
+    return "\n".join(lines)
+
+
 def _format_memory_java(result: Dict[str, Any]) -> Optional[str]:
     stdout = _text(result.get("stdout"))
     if not stdout:
@@ -225,6 +327,15 @@ def format_execution_result(skill_name: str, result: Dict[str, Any]) -> str:
         return f"{message}\n原因：{detail}" if detail else message
     if result.get("probe") in {"list_java_services", "check_cpu_usage", "check_service_health"}:
         return format_service_result(result)
+
+    if result.get("probe") == "check_memory_usage" and result.get("data"):
+        formatted = _format_memory_structured(result)
+        if formatted:
+            return formatted
+    if result.get("probe") == "check_disk_usage" and result.get("data"):
+        formatted = _format_disk_structured(result)
+        if formatted:
+            return formatted
 
     if skill_name == "check_disk_usage":
         formatted = _format_check_disk_usage(result)
